@@ -6,14 +6,16 @@ For more details about this component, please refer to the documentation at
 """
 import asyncio
 import logging
+import os
 
 from homeassistant.components.media_player import (
     ATTR_MEDIA_CONTENT_ID, ATTR_MEDIA_DURATION, ATTR_MEDIA_POSITION,
-    DOMAIN as MEDIA_PLAYER_DOMAIN, SERVICE_PLAY_MEDIA)
-
+    DOMAIN as MEDIA_PLAYER_DOMAIN, SERVICE_PLAY_MEDIA,
+    MEDIA_PLAYER_PLAY_MEDIA_SCHEMA)
 from homeassistant.const import (
     ATTR_ENTITY_ID, EVENT_STATE_CHANGED, STATE_IDLE, STATE_PAUSED,
     STATE_PLAYING, STATE_OFF)
+from homeassistant.config import load_yaml_config_file
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -31,17 +33,25 @@ def async_setup(hass, config):
 
     @asyncio.coroutine
     def async_play_media(call):
-        entity_id = call.data.get(ATTR_ENTITY_ID)
+        if not call.data.get(ATTR_ENTITY_ID):
+            raise RuntimeError('Empty entity_id not supported.')
 
-        if entity_id not in hass.data[DATA_PLAYLIST_PLAYERS]:
-            player = PlaylistPlayer(hass, entity_id)
-            hass.data[DATA_PLAYLIST_PLAYERS][entity_id] = player
-        else:
-            player = hass.data[DATA_PLAYLIST_PLAYERS][entity_id]
+        for entity_id in call.data.get(ATTR_ENTITY_ID):
+            if entity_id not in hass.data[DATA_PLAYLIST_PLAYERS]:
+                player = PlaylistPlayer(hass, entity_id)
+                hass.data[DATA_PLAYLIST_PLAYERS][entity_id] = player
+            else:
+                player = hass.data[DATA_PLAYLIST_PLAYERS][entity_id]
 
-        yield from player.async_play(call.data)
+            yield from player.async_play(call.data)
 
-    hass.services.async_register(DOMAIN, SERVICE_PLAY_MEDIA, async_play_media)
+    descriptions = load_yaml_config_file(
+        os.path.join(os.path.dirname(__file__),
+                     'media_player', 'services.yaml'))
+
+    hass.services.async_register(DOMAIN, SERVICE_PLAY_MEDIA, async_play_media,
+                                 description=descriptions[SERVICE_PLAY_MEDIA],
+                                 schema=MEDIA_PLAYER_PLAY_MEDIA_SCHEMA)
 
     @asyncio.coroutine
     def async_state_changed(event):
@@ -68,9 +78,10 @@ class PlaylistPlayer:
 
     @asyncio.coroutine
     def async_play(self, call_data):
-        self.data = {k: v for k, v in call_data.items()}
+        self.data = dict(call_data).copy()
+        self.data[ATTR_ENTITY_ID] = self.entity_id
 
-        self.media_ids = call_data.get(ATTR_MEDIA_CONTENT_ID)
+        self.media_ids = call_data.get(ATTR_MEDIA_CONTENT_ID).split(',')
         self.state = STATE_IDLE
 
         _LOGGER.info('Play for %s', self.entity_id)
