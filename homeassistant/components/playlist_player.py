@@ -8,8 +8,13 @@ import asyncio
 import logging
 
 from homeassistant.components.media_player import (
-    SERVICE_PLAY_MEDIA, ATTR_MEDIA_CONTENT_ID,
-    DOMAIN as MEDIA_PLAYER_DOMAIN)
+    ATTR_MEDIA_CONTENT_ID, ATTR_MEDIA_DURATION, ATTR_MEDIA_POSITION,
+    DOMAIN as MEDIA_PLAYER_DOMAIN, SERVICE_PLAY_MEDIA)
+
+from homeassistant.const import (
+    ATTR_ENTITY_ID, EVENT_STATE_CHANGED, STATE_IDLE, STATE_PAUSED,
+    STATE_PLAYING, STATE_OFF)
+
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -26,7 +31,7 @@ def async_setup(hass, config):
 
     @asyncio.coroutine
     def async_play_media(call):
-        entity_id = call.data.get('entity_id')
+        entity_id = call.data.get(ATTR_ENTITY_ID)
 
         if entity_id not in hass.data[DATA_PLAYLIST_PLAYERS]:
             player = PlaylistPlayer(hass, entity_id)
@@ -40,13 +45,14 @@ def async_setup(hass, config):
 
     @asyncio.coroutine
     def async_state_changed(event):
-        entity_id = event.data.get('entity_id')
+        entity_id = event.data.get(ATTR_ENTITY_ID)
+
         if entity_id in hass.data[DATA_PLAYLIST_PLAYERS]:
             player = hass.data[DATA_PLAYLIST_PLAYERS][entity_id]
             new_state = event.data.get('new_state')
             yield from player.async_state_changed(new_state)
 
-    hass.bus.async_listen('state_changed', async_state_changed)
+    hass.bus.async_listen(EVENT_STATE_CHANGED, async_state_changed)
 
     return True
 
@@ -64,8 +70,8 @@ class PlaylistPlayer:
     def async_play(self, call_data):
         self.data = {k: v for k, v in call_data.items()}
 
-        self.media_ids = call_data.get('media_content_id')
-        self.state = 'idle'
+        self.media_ids = call_data.get(ATTR_MEDIA_CONTENT_ID)
+        self.state = STATE_IDLE
 
         _LOGGER.info('Play for %s', self.entity_id)
 
@@ -100,32 +106,32 @@ class PlaylistPlayer:
         _LOGGER.debug('State for %s: %s => %s', self.entity_id, self.state,
                       new_state.state)
 
-        if new_state.state == 'playing':
+        if new_state.state == STATE_PLAYING:
             # Chromecast - support position, fire playing state 3 times,
             #     support off state from HDMI CEC (stop button)
             # Kodi - don't support position, fire playing state 1 time
             # Apple TV - suport position and off state from Homeassistant
-            duration = new_state.attributes.get('media_duration', 0)
-            position = new_state.attributes.get('media_position', 0)
+            duration = new_state.attributes.get(ATTR_MEDIA_DURATION, 0)
+            position = new_state.attributes.get(ATTR_MEDIA_POSITION, 0)
             new_time_left = duration - position
 
             _LOGGER.debug('Position: %.2f, Duration: %.2f', position, duration)
 
-            if self.state == 'idle' or new_time_left != self.time_left:
+            if self.state == STATE_IDLE or new_time_left != self.time_left:
                 # idle => playing = video started
                 # or updated duration, or updated position
                 self.start_time = time.time()
                 self.time_left = new_time_left
                 self.time_past = 0
-            elif self.state == 'paused':
+            elif self.state == STATE_PAUSED:
                 # paused => playing = continue after pause, can be new video
                 self.start_time = time.time()
             else:
                 # playing => playing = can be new video
                 pass
 
-        elif new_state.state == 'paused':
-            if self.state == 'playing':
+        elif new_state.state == STATE_PAUSED:
+            if self.state == STATE_PLAYING:
                 # playing => paused = update time_left
                 self.time_past += time.time() - self.start_time
             else:
@@ -133,8 +139,8 @@ class PlaylistPlayer:
                 _LOGGER.warning('Strange status change from %s to %s for %s',
                                 self.state, new_state.state, self.entity_id)
 
-        elif new_state.state == 'idle':
-            if self.state == 'playing':
+        elif new_state.state == STATE_IDLE:
+            if self.state == STATE_PLAYING:
                 # playing => idle = video ended or stop pressed
                 self.time_past += time.time() - self.start_time
 
@@ -146,14 +152,14 @@ class PlaylistPlayer:
                     yield from self.async_media_next_track()
                 else:
                     yield from self.async_stop()
-            elif self.state == 'paused':
+            elif self.state == STATE_PAUSED:
                 # paused => idle = stop pressed
                 yield from self.async_stop()
             else:
                 # idle => idle = can be loading
                 pass
 
-        elif new_state.state == 'off':
+        elif new_state.state == STATE_OFF:
             yield from self.async_stop()
 
         else:
